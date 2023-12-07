@@ -1,0 +1,52 @@
+{
+  "extends": "@tsconfig/node16/tsconfig.json",
+
+  "compilerOptions": {
+    "strict": true,
+    "alwaysStrict": true,
+
+    "allowJs": false,
+    "checkJs": false,
+
+    "sourceMap": true,
+    "declaration": false,
+    "removeComments": false,
+    "stripInternal": true,
+
+    "importHelpers": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "preserveConstEnums": true,
+    "resolveJsonModule": true,
+
+    "noErrorTruncation": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitAny": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noEmit": true,
+
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+
+    "types": [
+      "vitest/globals",
+    ],
+
+    "baseUrl": ".",
+
+    "paths": {
+      "@project-rouge/service-map-client/src/*": ["client/src/*"],
+      "@project-rouge/service-map/src/*": ["service/src/*"],
+    },
+  },
+
+  "include": [
+    "client",
+    "deploy",
+    "service",
+
+    ".eslintrc.js",
+    "commitlint.config.js",
+  ],
+}

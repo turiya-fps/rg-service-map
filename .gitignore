@@ -1,0 +1,16 @@
+deploy/build/coverage
+deploy/build/workspace
+deploy/.env
+
+client/build/coverage
+client/build/workspace
+
+service/build/coverage
+service/build/workspace
+service/src/database/certificates
+service/.env
+
+node_modules
+
+.eslintcache
+.npmrc

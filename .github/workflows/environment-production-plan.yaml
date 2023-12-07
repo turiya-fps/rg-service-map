@@ -1,0 +1,298 @@
+name: 'Environment: Production: Plan'
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+    paths:
+      - .github/workflows/environment-production-plan.yaml
+
+      - client/src/**
+      - client/Makefile
+      - client/package.json
+
+      - deploy/src/**
+      - deploy/Makefile
+      - deploy/package.json
+
+      - service/src/**
+      - service/Makefile
+      - service/package.json
+
+env:
+  HUSKY: '0'
+
+  RUNTIME: ci
+
+  # These are stack required environment variables that we can define globally.
+  # Each stage can retreive its requirements from pre-seeded system parameters stored on the infrastructure.
+  # The values are provided by the supervisor stack and are used to prime the terraform backend.
+  # Therefore we cannot retreive these from system parameters and must provided them manually.
+
+  AWS_REGION: eu-west-2
+  AWS_ROLE_DEPLOYMENT_ARN: arn:aws:iam::836637643120:role/deployment/remote-account-environment-production-service-map
+  AWS_ROLE_DEPLOYMENT_DATABASE_ARN: arn:aws:iam::149109384526:role/deployment/remote-account-environment-production-service-map-database
+
+  DEPLOY_ENVIRONMENT: production
+
+concurrency:
+  group: 'environment-production-plan'
+
+jobs:
+
+  # --
+  # -- Build Service
+  # --
+
+  build-service:
+    name: Build Service
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      # --
+      # -- Client
+      # --
+
+      - run: make compile
+        working-directory: client
+
+      - run: make package
+        working-directory: client
+
+      # --
+      # -- Service
+      # --
+
+      - run: make compile
+        working-directory: service
+
+      - run: make certificates
+        working-directory: service
+
+      - run: make package
+        working-directory: service
+
+      - run: make vendor
+        working-directory: service
+
+      # --
+      # -- Artifacts
+      # --
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: service-package
+          retention-days: 1
+          path: |
+            service/build/workspace/package.zip
+            service/build/workspace/package.zip.md5
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: service-vendor
+          retention-days: 1
+          path: |
+            service/build/workspace/vendor.zip
+            service/build/workspace/vendor.zip.md5
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: glue
+          retention-days: 1
+          path: |
+            service/build/workspace/glue/script/land-registry-data-sync.py
+            service/build/workspace/glue/jar/postgresql-driver.jar
+            service/build/workspace/glue/jar/snowflake-jdbc-driver.jar
+            service/build/workspace/glue/jar/spark-snowflake-driver.jar
+
+  # --
+  # -- Deployment: Stage: Foundation
+  # --
+
+  stage-foundation:
+    name: 'Stage: Foundation'
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    needs:
+      - build-service
+
+    env:
+      DEPLOY_STAGE: foundation
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      - run: make compile
+        working-directory: deploy
+
+      - uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_DEPLOYMENT_ARN }}
+          role-duration-seconds: 900
+
+      - run: make terraform
+        working-directory: deploy
+
+      - run: make terraform.stack.plan
+        working-directory: deploy
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ${{ github.job }}
+          retention-days: 30
+          path: deploy/build/workspace/terraform/cdk.tf.json
+
+  # --
+  # -- Deployment: Stage: Database
+  # --
+
+  stage-database:
+    name: 'Stage: Database'
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    needs:
+      - build-service
+
+    env:
+      DEPLOY_STAGE: database
+
+      # The database stage is a pseudo-stage that actually just runs some migration tooling.
+      # Because of this we need to provide its environment manually.
+
+      POSTGRES_PURPOSE: read
+      POSTGRES_DATABASE: shared
+      POSTGRES_HOSTNAME: ${{ secrets.POSTGRES_DATABASE_PRODUCTION_READ_HOSTNAME }}
+      POSTGRES_USERNAME: ${{ secrets.POSTGRES_DATABASE_PRODUCTION_READ_USERNAME }}
+
+      # GitHub is authorised to assume a role that can IAM authenticate with the database, so password is unused.
+      POSTGRES_PASSWORD: unused
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      - run: make certificates
+        working-directory: service
+
+      - run: make database
+        working-directory: service
+
+      - uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_DEPLOYMENT_DATABASE_ARN }}
+          role-duration-seconds: 900
+
+      # Note, these are ran from the root of the project because of `node_modules`.
+      # For some reason `npx` or `typeorm` has issues here.
+
+      - run: node ./node_modules/typeorm/cli.js -v
+      - run: node ./node_modules/typeorm/cli.js -d ./service/build/workspace/database/connection.cjs schema:log
+
+  # --
+  # -- Deployment: Stage: Application
+  # --
+
+  stage-application:
+    name: 'Stage: Application'
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    needs:
+      - stage-foundation
+      - stage-database
+
+    env:
+      DEPLOY_STAGE: application
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: service-package
+          path: service/build/workspace
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: service-vendor
+          path: service/build/workspace
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: glue
+          path: service/build/workspace/glue
+
+      - run: make compile
+        working-directory: deploy
+
+      - uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_DEPLOYMENT_ARN }}
+          role-duration-seconds: 900
+
+      - run: make terraform
+        working-directory: deploy
+
+      - run: make terraform.stack.plan
+        working-directory: deploy
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ${{ github.job }}
+          retention-days: 30
+          path: deploy/build/workspace/stacks/target/cdk.tf.json

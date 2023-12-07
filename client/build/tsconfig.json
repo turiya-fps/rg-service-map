@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.json",
+
+  "compilerOptions": {
+    "sourceMap": false,
+    "declaration": true,
+    "noEmit": false,
+
+    "outDir": "workspace/compile",
+  },
+
+  "include": [
+    "../src",
+  ],
+}

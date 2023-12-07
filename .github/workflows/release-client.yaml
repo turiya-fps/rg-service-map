@@ -1,0 +1,116 @@
+# Handle the release of the package.
+# Triggered when a GitHub release is created.
+name: Release
+
+# workflow triggers: https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#release
+# context: https://docs.github.com/en/actions/learn-github-actions/contexts
+# github context: https://docs.github.com/en/actions/learn-github-actions/contexts#github-context
+
+on:
+  # release event: https://docs.github.com/en/developers/webhooks-and-events/webhooks/webhook-events-and-payloads#release
+  # release object: https://docs.github.com/en/rest/releases/releases?apiVersion=2022-11-28#get-a-release
+  release:
+    types:
+      # A release was published, or a pre-release was changed to a release.
+      - released
+
+      # A release was created and identified as a pre-release.
+      # A pre-release is a release that is not ready for production and may be unstable.
+      - prereleased
+
+env:
+  HUSKY: '0'
+
+  ARTIFACT_NAME: client
+  ARTIFACT_DIR: client/build/workspace/package
+
+jobs:
+
+  # --
+  # -- Verify Version Step
+  # --
+
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+
+    steps:
+      # https://github.com/matt-usurp/validate-semver
+      - id: semver
+        uses: matt-usurp/validate-semver@v1
+        with:
+          # https://docs.github.com/en/actions/learn-github-actions/contexts#github-context
+          # For workflows triggered by release, this is the release tag created.
+          version: ${{ github.ref }}
+
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+
+  # --
+  # -- Build Step
+  # --
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      - run: make compile
+        working-directory: client
+
+      - run: make package
+        working-directory: client
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_DIR }}
+
+  # --
+  # -- Publish Package
+  # --
+
+  publish-package:
+    name: Publish Package
+    runs-on: ubuntu-latest
+
+    needs:
+      - build
+      - version
+
+    steps:
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+
+      - id: artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+
+      # Disables npm prepare scripts if one has been specified
+      - run: npm set-script prepare ""
+        working-directory: ${{ steps.artifact.outputs.download-path }}
+
+      # https://github.com/matt-usurp/npm-publish
+      - uses: matt-usurp/npm-publish@v2
+        with:
+          directory: ${{ steps.artifact.outputs.download-path }}
+          version: ${{ needs.version.outputs.version }}
+          access: restricted
+          # tenary statement: https://github.com/actions/runner/issues/409
+          tag: ${{ github.event.release.prerelease && 'next' || 'latest' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_PUBLISH }}

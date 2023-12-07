@@ -1,0 +1,19 @@
+{
+  "extends": "../tsconfig.json",
+
+  "compilerOptions": {
+    "baseUrl": ".",
+
+    "paths": {
+      "@project-rouge/service-map-client/src/*": ["../client/src/*"],
+    },
+  },
+
+  "include": [
+    "./src",
+  ],
+
+  "exclude": [
+    "**/*.py",
+  ],
+}

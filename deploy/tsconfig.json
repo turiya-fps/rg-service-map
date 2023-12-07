@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.json",
+
+  "compilerOptions": {
+    "baseUrl": ".",
+
+    "paths": {
+      "@project-rouge/service-map/src/*": ["../service/src/*"],
+    },
+  },
+
+  "include": [
+    "src",
+  ],
+}

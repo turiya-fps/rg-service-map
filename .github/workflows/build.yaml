@@ -1,0 +1,198 @@
+# Validate changes made comply to coding standards and tests pass.
+# Ensures the package can still be built and has expected outputs.
+name: Build
+
+# workflow triggers: https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request
+# context: https://docs.github.com/en/actions/learn-github-actions/contexts
+# github context: https://docs.github.com/en/actions/learn-github-actions/contexts#github-context
+
+on:
+  # pull request event: https://docs.github.com/developers/webhooks-and-events/webhooks/webhook-events-and-payloads#pull_request
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+env:
+  HUSKY: '0'
+
+jobs:
+
+  # --
+  # -- Code Standards
+  # --
+
+  code-standards:
+    name: Code Standards
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      - run: make code
+
+  # --
+  # -- Client
+  # --
+
+  validate-client:
+    name: Validate Client
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      - run: make test
+        working-directory: client
+
+      - run: make compile
+        working-directory: client
+
+      - run: make package
+        working-directory: client
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: client
+          retention-days: 1
+          path: |
+            client/build/workspace
+
+  # --
+  # -- Deploy
+  # --
+
+  validate-deploy:
+    name: Validate Deployment
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      - run: make test
+        working-directory: deploy
+
+      - run: make compile.types
+        working-directory: deploy
+
+      - run: make compile
+        working-directory: deploy
+        env:
+          RUNTIME: ci
+
+          # The below variables are required to get the stack compiled.
+          # But the values are intended to be fake as we are not running a legic plan.
+
+          AWS_REGION: eu-west-2
+
+          DEPLOY_ENVIRONMENT: development
+          DEPLOY_STAGE: foundation
+
+      - run: make terraform.workspace
+        working-directory: deploy
+
+  # --
+  # -- Service
+  # --
+
+  validate-service:
+    name: Validate Service
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      - run: make test
+        working-directory: service
+
+      - run: make compile
+        working-directory: service
+
+      - run: make certificates
+        working-directory: service
+
+      - run: make package
+        working-directory: service
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: service
+          retention-days: 1
+          path: |
+            service/build/workspace
+
+  # --
+  # -- Service Vendor
+  # --
+
+  validate-service-vendor:
+    name: Validate Service Vendor
+    runs-on: ubuntu-latest
+
+    needs:
+      - validate-client
+      - validate-service
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: client
+          path: client/build/workspace
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: service
+          path: service/build/workspace
+
+      - run: make vendor
+        working-directory: service
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SERVICE_READ }}
